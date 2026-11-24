@@ -268,7 +268,16 @@ class Top(Elaboratable):
         locked = Signal()
         locked_sys = Signal()
         m.submodules.lock_sync = FFSynchronizer(locked, locked_sys)
-        with m.If(boot < T_RETRY):
+        # SW0 0 -> 1 : redémarrage complet (reset PHY, puis MMCM, donc LUNA).
+        # Le PHY étant alimenté par VBUS, un débranchement du câble le
+        # réinitialise sans que LUNA le sache : on repart ainsi d'un état connu.
+        sw0_s = Signal()
+        sw0_s_prev = Signal()
+        m.submodules.sw0_sys_sync = FFSynchronizer(sw0, sw0_s)
+        m.d.sync += sw0_s_prev.eq(sw0_s)
+        with m.If(sw0_s & ~sw0_s_prev):
+            m.d.sync += boot.eq(0)
+        with m.Elif(boot < T_RETRY):
             m.d.sync += boot.eq(boot + 1)
         with m.Elif(~locked_sys):
             m.d.sync += boot.eq(0)
