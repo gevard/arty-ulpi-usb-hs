@@ -8,6 +8,7 @@ intégré à Windows, aucun pilote à installer) :
     SW1 = 0 : écho      — tout octet envoyé par le PC lui est renvoyé
     SW1 = 1 : débit     — le FPGA envoie un flux continu (compteur 8 bits) et
                           absorbe tout ce que le PC envoie, pour mesurer le débit
+    SW2 = 1 : Full-Speed seulement (diagnostic : à basculer avant SW0)
 
 VID/PID : 0x1209 / 0x0001 (pid.codes, réservé aux essais).
 
@@ -247,6 +248,7 @@ class Top(Elaboratable):
         uart = platform.request("uart", 0)
         sw0 = platform.request("switch", 0).i
         sw1 = platform.request("switch", 1).i
+        sw2 = platform.request("switch", 2).i
 
         # ------------------------------------------------------------------
         # Démarrage (domaine sync) : reset PHY 1 ms, MMCM 5 ms, nouvel essai
@@ -302,6 +304,8 @@ class Top(Elaboratable):
         sw1_u = Signal()
         m.submodules.sw0_sync = FFSynchronizer(sw0, sw0_u, o_domain="usb")
         m.submodules.sw1_sync = FFSynchronizer(sw1, sw1_u, o_domain="usb")
+        sw2_u = Signal()
+        m.submodules.sw2_sync = FFSynchronizer(sw2, sw2_u, o_domain="usb")
 
         # ------------------------------------------------------------------
         # Bus ULPI au format attendu par LUNA (data.i/.o/.oe, dir.i, nxt.i,
@@ -337,6 +341,8 @@ class Top(Elaboratable):
         rx = rx_ep.stream
         tx = tx_ep.stream
         m.d.comb += usb.connect.eq(sw0_u)
+        # SW2 = 1 : Full-Speed seulement (pas de chirp High-Speed), pour le diagnostic
+        m.d.comb += usb.full_speed_only.eq(sw2_u)
 
         # SW1 = 0 : écho ; SW1 = 1 : flux continu + absorption
         counter = Signal(8)
@@ -420,7 +426,7 @@ class Top(Elaboratable):
         msg = []
         for name, c in counters.items():
             msg += text(name + "=") + hexchars(c, 4) + text(" ")
-        msg += (text("SW1=") + [sw1_u + ord("0")]
+        msg += (text("SW1=") + [sw1_u + ord("0")] + text(" SW2=") + [sw2_u + ord("0")]
                 + text(" TXV=") + [tx.valid + ord("0")] + text(" TXR=") + [tx.ready + ord("0")]
                 + text(" RXV=") + [rx.valid + ord("0")] + text(" RXR=") + [rx.ready + ord("0")]
                 + text(" SPD=") + [usb.speed + ord("0")]
