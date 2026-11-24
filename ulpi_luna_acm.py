@@ -24,6 +24,8 @@ Pmod JC : DATA0..7). JB10 = RESETB du USB3343, actif BAS.
 UART (port COM de l'Arty, 115200 8N1), toutes les 0,5 s, compteurs 16 bits (hex) :
     IN4/OUT4/PING4 : jetons reçus pour l'endpoint 4 ; IN0 : jetons IN pour l'EP0
     NAK/ACK/NYET/STALL/D0/D1 : réponses émises par le FPGA ; HACK : ACK reçus du PC
+    RXA/RXE : débuts de réception / RxError signalés par le PHY ; LS : changements
+    de LineState ; SOF : SOF reconnus par LUNA ; RST : resets USB détectés
     SW1, TXV/TXR, RXV/RXR (valid/ready des flux), SPD (0 = HS, 1 = FS)
 
 ILA (horloge USB 60 MHz, 4096 échantillons, 5 sondes, noms lisibles) :
@@ -420,6 +422,25 @@ class Top(Elaboratable):
         count("D0", tx_cmd & (u_dout[0:4] == 0x3))
         count("D1", tx_cmd & (u_dout[0:4] == 0xB))
         count("HACK", hs_ack)
+
+        # Activité du PHY, indépendante des paquets décodés :
+        #   RXA : débuts de réception (DIR monte avec NXT = 1, ou RX CMD RxActive)
+        #   RXE : RX CMD « RxError »   LS : changements de LineState
+        #   SOF : SOF reconnus par LUNA   RST : resets USB détectés par LUNA
+        rx_cmd = Signal()
+        m.d.comb += rx_cmd.eq(u_dir & dir_prev & ~u_nxt)
+        last_ev = Signal(2)
+        last_ls = Signal(2)
+        with m.If(rx_cmd):
+            m.d.usb += [last_ev.eq(u_din[4:6]), last_ls.eq(u_din[0:2])]
+        rst_prev = Signal()
+        m.d.usb += rst_prev.eq(usb.reset_detected)
+        count("RXA", (u_dir & ~dir_prev & u_nxt) |
+                     (rx_cmd & (u_din[4:6] == 1) & (last_ev != 1)))
+        count("RXE", rx_cmd & (u_din[4:6] == 3) & (last_ev != 3))
+        count("LS", rx_cmd & (u_din[0:2] != last_ls))
+        count("SOF", usb.sof_detected)
+        count("RST", usb.reset_detected & ~rst_prev)
 
         # Rapport UART toutes les 0,5 s (115200 8N1, domaine usb)
         m.submodules.tx_uart = tx_uart = DomainRenamer("usb")(UartTx(round(ULPI_HZ / 115200)))
