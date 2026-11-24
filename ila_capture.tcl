@@ -1,6 +1,7 @@
 # Capture ILA de ulpi_luna_acm (console Tcl de Vivado) :
 #     source C:/ulpi/Python/ila_capture.tcl
 #     capture setup      ;# déclenche sur le PID SETUP (0x2D) reçu
+#     capture rxdata     ;# déclenche sur le premier octet de paquet reçu
 #     capture rxerror    ;# déclenche sur un RX CMD « RxError »
 #     capture reset      ;# déclenche sur le reset USB détecté par LUNA
 # Après « capture ... », basculer SW0 de 0 à 1 dans la minute.
@@ -47,6 +48,11 @@ proc capture {mode} {
             probe $ila ulpi_nxt "eq1'b1"
             probe $ila ulpi_din "eq8'h2D"
         }
+        rxdata {
+            # n'importe quel octet de paquet reçu (DIR = 1 et NXT = 1)
+            probe $ila ulpi_dir "eq1'b1"
+            probe $ila ulpi_nxt "eq1'b1"
+        }
         rxerror {
             probe $ila ulpi_dir "eq1'b1"
             probe $ila ulpi_nxt "eq1'b0"
@@ -55,7 +61,7 @@ proc capture {mode} {
         reset {
             probe $ila usb_reset "eq1'bR"
         }
-        default { error "mode inconnu : $mode (setup, rxerror ou reset)" }
+        default { error "mode inconnu : $mode (setup, rxdata, rxerror ou reset)" }
     }
     run_hw_ila $ila
     puts ">>> ILA armée ($mode) : basculez SW0 de 0 à 1 maintenant (1 minute max)"
