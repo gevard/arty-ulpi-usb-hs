@@ -11,11 +11,13 @@ set LTX {C:/ulpi/Python/build/ulpi_luna_acm.ltx}
 
 proc ila_connect {} {
     global LTX
-    if {[catch {current_hw_server}]} {
-        open_hw_manager
+    # current_hw_server / current_hw_target renvoient "" (avec un simple
+    # avertissement) quand rien n'est connecté : on teste la valeur.
+    catch {open_hw_manager}
+    if {[current_hw_server -quiet] eq ""} {
         connect_hw_server
     }
-    if {[catch {current_hw_target}] || [get_property IS_OPENED [current_hw_target]] == 0} {
+    if {[current_hw_target -quiet] eq "" || ![get_property IS_OPENED [current_hw_target]]} {
         open_hw_target
     }
     set dev [lindex [get_hw_devices xc7a35t*] 0]
