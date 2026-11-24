@@ -15,9 +15,18 @@ Résultat :
     UART (port COM de l'Arty, 115200 8N1), toutes les 0,5 s :
         VID=0424 PID=0004 SCR=5A OK
 
+ILA (IP Vivado, horloge ULPI, 4096 échantillons, 5 sondes) :
+    probe0 ctrl[4] : bit0 DIR, bit1 NXT, bit2 STP, bit3 OE
+    probe1 dout[8], probe2 din[8],
+    probe3 state[4] (0 WAIT, 1 CMD, 2 WR_DATA, 3 WR_STP, 4 RD_TURN,
+                  5 RD_DATA, 6 RD_END, 7 ABORT, 8 NEXT),
+    probe4 step[3] (0 écriture Scratch, 1-2 VID, 3-4 PID, 5 lecture Scratch)
+    Fichier de sondes : build/ulpi_regtest.ltx
+
 Construction (Vivado dans le PATH) :
     python ulpi_regtest.py            -> build/ulpi_regtest.bit
     python ulpi_regtest.py --program  -> construit et programme via Vivado
+    python ulpi_regtest.py --no-ila   -> sans ILA
 """
 
 import argparse
@@ -36,7 +45,7 @@ ULPI_HZ = 60_000_000
 BAUD = 115_200
 
 USB3300_VID = 0x0424
-USB3300_PID = 0x0004   # lu sur le module (0x0007 = USB3320, 0x0006 = USB331x)
+USB3300_PID = 0x0009   # lu sur le module (0x0007 = USB3320, 0x0006 = USB331x)
 SCRATCH_ADDR = 0x16
 SCRATCH_VAL = 0x5A
 
@@ -89,6 +98,9 @@ class UartTx(Elaboratable):
 
 
 class Top(Elaboratable):
+    def __init__(self, with_ila=True):
+        self.with_ila = with_ila
+
     def elaborate(self, platform):
         m = Module()
 
@@ -127,7 +139,8 @@ class Top(Elaboratable):
         with m.Elif(~locked_sys):
             m.d.sync += boot.eq(0)  # pas d'horloge PHY : nouvelle tentative
         m.d.sync += [phy_rst.eq(boot < T_PHY_RST), mmcm_rst.eq(boot < T_MMCM_RST)]
-        m.d.comb += rst_buf.o.eq(phy_rst)
+        #m.d.comb += rst_buf.o.eq(phy_rst)
+        m.d.comb += rst_buf.o.eq(~phy_rst)
 
         # ------------------------------------------------------------------
         # Horloge ULPI : CLKOUT 60 MHz du PHY -> MMCM en compensation (zéro
@@ -179,6 +192,19 @@ class Top(Elaboratable):
         step_addr = Array(C(a, 6) for _, a in steps)[step]
         res = Array(Signal(8, name=f"res{i}") for i in range(len(steps)))
 
+        # Signaux observés par l'ILA
+        dbg_dir = Signal(name="dbg_dir")
+        dbg_nxt = Signal(name="dbg_nxt")
+        dbg_stp = Signal(name="dbg_stp")
+        dbg_oe = Signal(name="dbg_oe")
+        dbg_dout = Signal(8, name="dbg_dout")
+        dbg_din = Signal(8, name="dbg_din")
+        dbg_state = Signal(4, name="dbg_state")
+        dbg_step = Signal(3, name="dbg_step")
+        m.d.comb += [dbg_dir.eq(dir_), dbg_nxt.eq(nxt), dbg_stp.eq(stp),
+                     dbg_oe.eq(dat_buf.oe), dbg_dout.eq(data_o), dbg_din.eq(dat_buf.i),
+                     dbg_step.eq(step)]
+
         timer = Signal(range(ULPI_HZ // 2 + 1), init=ULPI_HZ // 1000)  # 1 ms au départ
         timeout = Signal(10)
         fail = Signal()
@@ -186,6 +212,7 @@ class Top(Elaboratable):
 
         with m.FSM(domain="ulpi"):
             with m.State("WAIT"):
+                m.d.comb += dbg_state.eq(0)  # WAIT
                 with m.If(timer != 0):
                     m.d.ulpi += timer.eq(timer - 1)
                 with m.Elif(~dir_):
@@ -196,6 +223,7 @@ class Top(Elaboratable):
             # Maintenu jusqu'à NXT. Si DIR monte avant, le PHY prend le bus
             # (RX CMD) : transaction abandonnée, on recommence.
             with m.State("CMD"):
+                m.d.comb += dbg_state.eq(1)  # CMD
                 # bit 7 = 1 (commande registre), bit 6 = 1 lecture / 0 écriture
                 m.d.comb += data_o.eq(Cat(step_addr, step_wr == 0, C(1, 1)))
                 m.d.ulpi += timeout.eq(timeout + 1)
@@ -213,6 +241,7 @@ class Top(Elaboratable):
 
             # Écriture : donnée maintenue jusqu'à NXT, puis STP un cycle.
             with m.State("WR_DATA"):
+                m.d.comb += dbg_state.eq(2)  # WR_DATA
                 m.d.comb += data_o.eq(SCRATCH_VAL)
                 m.d.ulpi += timeout.eq(timeout + 1)
                 with m.If(dir_):
@@ -224,12 +253,14 @@ class Top(Elaboratable):
                     m.next = "NEXT"
 
             with m.State("WR_STP"):
+                m.d.comb += dbg_state.eq(3)  # WR_STP
                 m.d.comb += stp.eq(1)
                 m.next = "NEXT"
 
             # Lecture : après NXT, le PHY monte DIR (cycle de retournement),
             # puis présente la donnée au cycle suivant, puis redescend DIR.
             with m.State("RD_TURN"):
+                m.d.comb += dbg_state.eq(4)  # RD_TURN
                 m.d.ulpi += timeout.eq(timeout + 1)
                 with m.If(dir_):
                     m.next = "RD_DATA"
@@ -238,6 +269,7 @@ class Top(Elaboratable):
                     m.next = "NEXT"
 
             with m.State("RD_DATA"):
+                m.d.comb += dbg_state.eq(5)  # RD_DATA
                 m.d.ulpi += res[step].eq(dat_buf.i)
                 with m.If(nxt):
                     # NXT avec DIR = 1 ici = RX CMD prioritaire, lecture perdue
@@ -246,15 +278,18 @@ class Top(Elaboratable):
                     m.next = "RD_END"
 
             with m.State("RD_END"):
+                m.d.comb += dbg_state.eq(6)  # RD_END
                 with m.If(~dir_):
                     m.next = "NEXT"
 
             with m.State("ABORT"):
+                m.d.comb += dbg_state.eq(7)  # ABORT
                 with m.If(~dir_):
                     m.d.ulpi += timeout.eq(0)
                     m.next = "CMD"
 
             with m.State("NEXT"):
+                m.d.comb += dbg_state.eq(8)  # NEXT
                 with m.If(step == len(steps) - 1):
                     m.d.ulpi += timer.eq(ULPI_HZ // 2)
                     m.d.comb += report.eq(1)
@@ -324,8 +359,41 @@ class Top(Elaboratable):
             leds[3].eq(scr_ok),
             uart.tx.o.eq(tx.tx),
         ]
+
+        # ILA (IP Vivado « ila_ulpi », générée par ILA_IP_TCL avant la synthèse)
+        if self.with_ila:
+            m.submodules.ila = Instance("ila_ulpi",
+                i_clk=ClockSignal("ulpi"),
+                # licence BASIC : 5 sondes au maximum -> contrôle regroupé sur 4 bits
+                # probe0[0] DIR, [1] NXT, [2] STP, [3] OE
+                i_probe0=Cat(dbg_dir, dbg_nxt, dbg_stp, dbg_oe),
+                i_probe1=dbg_dout, i_probe2=dbg_din, i_probe3=dbg_state, i_probe4=dbg_step,
+            )
         return m
 
+
+# ILA instanciée comme IP (create_debug_core est refusé en licence BASIC, qui
+# limite aussi l'ILA à 5 sondes).
+# probe0 ctrl[4] = {OE, STP, NXT, DIR} (bit 0 = DIR), probe1 dout[8],
+# probe2 din[8], probe3 state[4], probe4 step[3]
+ILA_IP_TCL = """
+file mkdir ip
+create_ip -name ila -vendor xilinx.com -library ip -module_name ila_ulpi -dir [file normalize ip]
+set_property -dict [list \\
+    CONFIG.C_NUM_OF_PROBES {5} \\
+    CONFIG.C_DATA_DEPTH {4096} \\
+    CONFIG.C_INPUT_PIPE_STAGES {0} \\
+    CONFIG.C_PROBE0_WIDTH {4} \\
+    CONFIG.C_PROBE1_WIDTH {8} \\
+    CONFIG.C_PROBE2_WIDTH {8} \\
+    CONFIG.C_PROBE3_WIDTH {4} \\
+    CONFIG.C_PROBE4_WIDTH {3} \\
+] [get_ips ila_ulpi]
+set_property GENERATE_SYNTH_CHECKPOINT false [get_files ila_ulpi.xci]
+generate_target all [get_ips ila_ulpi]
+"""
+
+ILA_LTX_TCL = "write_debug_probes -force ulpi_regtest.ltx"
 
 PROGRAM_TCL = """open_hw_manager
 connect_hw_server
@@ -333,28 +401,48 @@ open_hw_target
 set dev [lindex [get_hw_devices xc7a35t*] 0]
 current_hw_device $dev
 set_property PROGRAM.FILE {{{bit}}} $dev
+set_property PROBES.FILE {{{ltx}}} $dev
+set_property FULL_PROBES.FILE {{{ltx}}} $dev
 program_hw_devices $dev
+refresh_hw_device $dev
 close_hw_manager
 """
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--program", action="store_true", help="programmer la carte après la construction")
+    ap.add_argument("--program", action="store_true", help="construire puis programmer la carte")
+    ap.add_argument("--program-only", action="store_true",
+                     help="reprogrammer build/ulpi_regtest.bit existant, sans reconstruire")
     ap.add_argument("--no-build", action="store_true", help="générer seulement les fichiers (sans Vivado)")
+    ap.add_argument("--no-ila", action="store_true", help="construire sans ILA")
     args = ap.parse_args()
 
     platform = ArtyA7_35Platform()
     platform.add_resources(ULPI_RESOURCE)
-    if args.no_build:
-        platform.prepare(Top(), name="ulpi_regtest").extract("build")
-    else:
-        platform.build(Top(), name="ulpi_regtest", build_dir="build")
+    with_ila = not args.no_ila
 
-    if args.program:
+    if not args.program_only:
+        overrides = dict(script_after_read=ILA_IP_TCL, script_after_route=ILA_LTX_TCL) if with_ila else {}
+        if args.no_build:
+            platform.prepare(Top(with_ila), name="ulpi_regtest", **overrides).extract("build")
+        else:
+            platform.build(Top(with_ila), name="ulpi_regtest", build_dir="build", **overrides)
+
+    if args.program or args.program_only:
         bit = os.path.abspath(os.path.join("build", "ulpi_regtest.bit")).replace("\\", "/")
+        if not os.path.exists(bit):
+            raise SystemExit(f"Bitstream introuvable : {bit}\n"
+                              f"Lance d'abord une construction complète (sans --program-only).")
+        ltx = bit[:-4] + ".ltx"
+        if with_ila and not os.path.exists(ltx):
+            raise SystemExit(f"Fichier de sondes introuvable : {ltx}\n"
+                              f"Reconstruis sans --no-ila, ou ajoute --no-ila ici pour programmer sans sondes.")
         tcl = os.path.join("build", "program.tcl")
         with open(tcl, "w") as f:
-            f.write(PROGRAM_TCL.format(bit=bit))
+            prog = PROGRAM_TCL.format(bit=bit, ltx=ltx)
+            if not with_ila:
+                prog = "\n".join(l for l in prog.splitlines() if "PROBES.FILE" not in l) + "\n"
+            f.write(prog)
         vivado = "vivado.bat" if os.name == "nt" else "vivado"
         subprocess.run([vivado, "-mode", "batch", "-nojournal", "-nolog", "-source", tcl], check=True)

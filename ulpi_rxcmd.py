@@ -67,7 +67,7 @@ ULPI_HZ = 60_000_000
 BAUD = 115_200
 
 USB3300_VID = 0x0424
-USB3300_PID = 0x0004   # USB3300 (0x0006 = USB331x, 0x0007 = USB3320)
+USB3300_PID = 0x0009   # USB3300 (0x0006 = USB331x, 0x0007 = USB3320, 0x0009 = USB3343)
 REG_FUNC_CTRL = 0x04
 REG_OTG_CTRL = 0x0A
 REG_SCRATCH = 0x16
@@ -171,7 +171,7 @@ class Top(Elaboratable):
         with m.Elif(~locked_sys):
             m.d.sync += boot.eq(0)
         m.d.sync += [phy_rst.eq(boot < T_PHY_RST), mmcm_rst.eq(boot < T_MMCM_RST)]
-        m.d.comb += rst_buf.o.eq(phy_rst)
+        m.d.comb += rst_buf.o.eq(~phy_rst)
 
         # ------------------------------------------------------------------
         # Horloge ULPI : 60 MHz du PHY -> MMCM (compensation, zéro délai) -> BUFG
