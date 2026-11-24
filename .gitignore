@@ -1,0 +1,9 @@
+# Sorties Vivado / Python
+build/
+.Xil/
+__pycache__/
+*.pyc
+# Anciennes révisions (historique désormais dans git)
+*_rev*.py
+*_Rev*.py
+*\ *.py
