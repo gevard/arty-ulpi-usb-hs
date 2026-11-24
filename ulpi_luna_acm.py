@@ -34,6 +34,13 @@ Construction (même environnement que les étapes précédentes, + luna-usb 0.2.
     python -m pip install luna-usb==0.2.3
     python ulpi_luna_acm.py --program
     python ulpi_luna_acm.py --program-only
+
+Timing ULPI (USB3343, oscillateur 60 MHz commun au PHY et au FPGA) :
+    contraintes d'E/S dans build/ulpi_luna_acm_ulpi_timing.xdc,
+    rapport des chemins d'E/S dans build/ulpi_luna_acm_ulpi_io.rpt
+    python ulpi_luna_acm.py --clk-phase 90 --program   -> horloge interne retardée de 90°
+    python ulpi_luna_acm.py --board-ns 2 --program     -> marge carte de 2 ns
+    La phase utilisée est rappelée sur l'UART (PH=...).
 """
 
 import argparse
@@ -60,6 +67,47 @@ from usb_protocol.emitters.descriptors import cdc
 NAME = "ulpi_luna_acm"
 SYS_HZ = 100_000_000
 ULPI_HZ = 60_000_000
+
+# Timing ULPI du USB3343 en mode « horloge en entrée » (oscillateur 60 MHz commun
+# au PHY et au FPGA), fiche USB334x rév. 1.2, table 4.4 :
+#   setup STP/data vers le PHY 3,0 ns min, hold 0,0 ns min,
+#   délai de sortie DIR/NXT/data du PHY 0,5 ns min, 6,0 ns max.
+# BOARD_NS : marge pour les fils Pmod et l'écart d'arrivée de l'horloge au PHY
+# et au FPGA (inconnu : 1 ns par défaut, réglable avec --board-ns).
+PHY_SETUP_NS, PHY_HOLD_NS = 3.0, 0.0
+PHY_TCO_MIN_NS, PHY_TCO_MAX_NS = 0.5, 6.0
+
+
+def ulpi_timing_xdc(board_ns):
+    """Contraintes d'E/S du bus ULPI, par rapport à l'horloge reçue sur JB3."""
+    clk = "ulpi_0__clk__io"
+    ins = '[get_ports {ulpi_0__dir__io ulpi_0__nxt__io ulpi_0__data__io[*]}]'
+    outs = '[get_ports {ulpi_0__stp__io ulpi_0__data__io[*]}]'
+    return "\n".join([
+        f"set_input_delay  -clock {clk} -max {PHY_TCO_MAX_NS + board_ns:.2f} {ins}",
+        f"set_input_delay  -clock {clk} -min {PHY_TCO_MIN_NS - board_ns:.2f} {ins}",
+        f"set_output_delay -clock {clk} -max {PHY_SETUP_NS + board_ns:.2f} {outs}",
+        f"set_output_delay -clock {clk} -min {-(PHY_HOLD_NS + board_ns):.2f} {outs}",
+        # le reset du PHY est asynchrone
+        "set_false_path -to [get_ports ulpi_0__rst__io]",
+    ])
+
+
+# Rapport du timing des E/S ULPI après routage (build/<NAME>_ulpi_io.rpt)
+ULPI_REPORT_TCL = (f"report_timing -from [all_inputs] -to [all_outputs] -max_paths 20 "
+                   f"-file {NAME}_ulpi_io.rpt\n"
+                   f"report_timing -from [get_ports ulpi_0__*] -max_paths 20 -append "
+                   f"-file {NAME}_ulpi_io.rpt\n"
+                   f"report_timing -to [get_ports ulpi_0__*] -max_paths 20 -append "
+                   f"-file {NAME}_ulpi_io.rpt\n"
+                   f"report_timing -from [get_ports ulpi_0__*] -hold -max_paths 20 -append "
+                   f"-file {NAME}_ulpi_io.rpt")
+
+
+def mmcm_phase(deg):
+    """Déphasage de CLKOUT0 arrondi au pas du MMCM (45° / CLKOUT0_DIVIDE = 2,8125°)."""
+    step = 45.0 / 16
+    return round((deg % 360) / step) * step
 
 VID = 0x1209
 PID = 0x0001
@@ -177,8 +225,9 @@ class UartTx(Elaboratable):
 
 
 class Top(Elaboratable):
-    def __init__(self, with_ila=True):
+    def __init__(self, with_ila=True, clk_phase=0.0):
         self.with_ila = with_ila
+        self.clk_phase = mmcm_phase(clk_phase)
 
     def elaborate(self, platform):
         m = Module()
@@ -235,6 +284,8 @@ class Top(Elaboratable):
             p_DIVCLK_DIVIDE=1,
             p_CLKFBOUT_MULT_F=16.0,
             p_CLKOUT0_DIVIDE_F=16.0,
+            # retard de l'horloge interne par rapport à JB3 (option --clk-phase)
+            p_CLKOUT0_PHASE=self.clk_phase,
             i_CLKIN1=clk_buf.i,
             i_CLKFBIN=clkfb_bufg,
             o_CLKFBOUT=clkfb,
@@ -373,6 +424,7 @@ class Top(Elaboratable):
                 + text(" TXV=") + [tx.valid + ord("0")] + text(" TXR=") + [tx.ready + ord("0")]
                 + text(" RXV=") + [rx.valid + ord("0")] + text(" RXR=") + [rx.ready + ord("0")]
                 + text(" SPD=") + [usb.speed + ord("0")]
+                + text(f" PH={self.clk_phase:.0f}")
                 + text("\r\n"))
         midx = Signal(range(len(msg) + 1))
         tick = Signal(range(ULPI_HZ // 2))
@@ -489,15 +541,24 @@ if __name__ == "__main__":
     ap.add_argument("--program", action="store_true", help="programmer la carte après la construction")
     ap.add_argument("--no-build", action="store_true", help="générer seulement les fichiers (sans Vivado)")
     ap.add_argument("--no-ila", action="store_true", help="construire sans ILA")
+    ap.add_argument("--clk-phase", type=float, default=0.0,
+                    help="retard de l'horloge interne en degrés (pas de 2,8125°, 360° = 16,7 ns)")
+    ap.add_argument("--board-ns", type=float, default=1.0,
+                    help="marge carte/fils Pmod des contraintes d'E/S ULPI (ns, défaut 1,0)")
     ap.add_argument("--program-only", action="store_true",
                     help="programmer la carte avec build/ (bit + ltx) sans reconstruire")
     args = ap.parse_args()
 
     with_ila = not args.no_ila
-    overrides = dict(script_after_read=ILA_IP_TCL, script_after_route=ILA_LTX_TCL) if with_ila else {}
+    overrides = dict(script_after_route=ULPI_REPORT_TCL)
+    if with_ila:
+        overrides.update(script_after_read=ILA_IP_TCL,
+                         script_after_route=ULPI_REPORT_TCL + "\n" + ILA_LTX_TCL)
 
     platform = ArtyA7_35Platform()
     platform.add_resources(ULPI_RESOURCE)
+    # contraintes d'E/S ULPI : fichier XDC séparé (l'Arty utilise déjà add_constraints)
+    platform.add_file(NAME + "_ulpi_timing.xdc", ulpi_timing_xdc(args.board_ns))
     # LUNA déduit la présence de VBUS du dernier RX CMD reçu. Sur ce banc, le PHY
     # envoie son RX CMD « VBUS valide » juste après son reset, pendant que le
     # domaine USB attend encore le verrouillage du MMCM : il est perdu, et LUNA
@@ -509,9 +570,9 @@ if __name__ == "__main__":
         if not os.path.exists(os.path.join("build", NAME + ".ltx")):
             with_ila = False
     elif args.no_build:
-        platform.prepare(Top(with_ila), name=NAME, **overrides).extract("build")
+        platform.prepare(Top(with_ila, args.clk_phase), name=NAME, **overrides).extract("build")
     else:
-        platform.build(Top(with_ila), name=NAME, build_dir="build", **overrides)
+        platform.build(Top(with_ila, args.clk_phase), name=NAME, build_dir="build", **overrides)
 
     if args.program:
         bit = os.path.abspath(os.path.join("build", NAME + ".bit")).replace("\\", "/")
