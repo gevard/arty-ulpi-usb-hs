@@ -5,7 +5,7 @@
 #     capture rxerror    ;# déclenche sur un RX CMD « RxError »
 #     capture reset      ;# déclenche sur le reset USB détecté par LUNA
 # Après « capture ... », basculer SW0 de 0 à 1 dans la minute.
-# Le CSV est écrit dans C:/ulpi/ila_<mode>.csv, à décoder avec :
+# Le CSV est écrit dans C:/ulpi/ila_<mode>_<hhmmss>.csv (seulement si déclenché) :
 #     python ulpi_decode.py C:\ulpi\ila_setup.csv
 
 set LTX {C:/ulpi/Python/build/ulpi_luna_acm.ltx}
@@ -65,11 +65,15 @@ proc capture {mode} {
     }
     run_hw_ila $ila
     puts ">>> ILA armée ($mode) : basculez SW0 de 0 à 1 maintenant (1 minute max)"
-    if {[catch {wait_on_hw_ila -timeout 1 $ila} err]} {
-        puts ">>> Pas de déclenchement en 1 minute ($err)"
+    # wait_on_hw_ila ne renvoie pas d'erreur à l'expiration : on vérifie qu'il
+    # y a des données avant d'écrire quoi que ce soit.
+    catch {wait_on_hw_ila -timeout 1 $ila}
+    set data [upload_hw_ila_data -quiet $ila]
+    if {$data eq ""} {
+        puts ">>> PAS DE DÉCLENCHEMENT en 1 minute ($mode) : aucun fichier écrit"
         return
     }
-    set csv "C:/ulpi/ila_$mode.csv"
-    write_hw_ila_data -force -csv_file $csv [upload_hw_ila_data $ila]
-    puts ">>> Capture écrite : $csv"
+    set csv "C:/ulpi/ila_${mode}_[clock format [clock seconds] -format %H%M%S].csv"
+    write_hw_ila_data -force -csv_file $csv $data
+    puts ">>> DÉCLENCHÉ ($mode) : capture écrite dans $csv"
 }
