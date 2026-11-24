@@ -1,6 +1,6 @@
 """
 ULPI étape 3 — périphérique USB 2.0 High-Speed complet avec LUNA, sur Arty A7-35T
-+ module Waveshare USB3300.
++ module USB3343 (portage depuis la version Waveshare USB3300, tag git usb3300).
 
 Le FPGA se présente au PC comme un port série virtuel (CDC-ACM, pilote usbser
 intégré à Windows, aucun pilote à installer) :
@@ -18,7 +18,7 @@ LED :
     LD7 : activité USB (paquets émis ou reçus)
 
 Câblage identique aux étapes 1 et 2 (Pmod JB : STP NXT CLK DIR … RESET ;
-Pmod JC : DATA0..7).
+Pmod JC : DATA0..7). JB10 = RESETB du USB3343, actif BAS.
 
 UART (port COM de l'Arty, 115200 8N1), toutes les 0,5 s, compteurs 16 bits (hex) :
     IN4/OUT4/PING4 : jetons reçus pour l'endpoint 4 ; IN0 : jetons IN pour l'EP0
@@ -87,7 +87,7 @@ def acm_descriptors():
         d.idVendor = VID
         d.idProduct = PID
         d.iManufacturer = "AGSIM"
-        d.iProduct = "ULPI test (Arty + USB3300)"
+        d.iProduct = "ULPI test (Arty + USB3343)"
         d.iSerialNumber = "0001"
         d.bNumConfigurations = 1
 
@@ -203,7 +203,8 @@ class Top(Elaboratable):
         # Démarrage (domaine sync) : reset PHY 1 ms, MMCM 5 ms, nouvel essai
         # toutes les 50 ms tant que le MMCM n'est pas verrouillé.
         # Le reset du PHY reste sous notre contrôle (et pas sous celui de LUNA),
-        # car le USB3300 coupe son horloge pendant le reset.
+        # car le PHY coupe son horloge pendant le reset.
+        # USB3343 : broche RESETB active BAS (le USB3300 avait RESET actif haut).
         # ------------------------------------------------------------------
         T_PHY_RST = SYS_HZ // 1000
         T_MMCM_RST = 5 * SYS_HZ // 1000
@@ -219,7 +220,7 @@ class Top(Elaboratable):
         with m.Elif(~locked_sys):
             m.d.sync += boot.eq(0)
         m.d.sync += [phy_rst.eq(boot < T_PHY_RST), mmcm_rst.eq(boot < T_MMCM_RST)]
-        m.d.comb += rst_buf.o.eq(phy_rst)
+        m.d.comb += rst_buf.o.eq(~phy_rst)
 
         # ------------------------------------------------------------------
         # Domaine « usb » : 60 MHz du PHY -> MMCM (compensation) -> BUFG
