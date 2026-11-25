@@ -28,7 +28,7 @@ Measured on the USB3343 prototype (Windows, High-Speed):
 
 | | **USB3343** (own prototype board) | **USB3300** (Waveshare USB3300 module) |
 |---|---|---|
-| Git ref | `main` (tag `usb3343-hs-ok`) | tag / branch `usb3300` |
+| Git ref | `main` (tag `usb3343-hs-ok`) | tag `usb3300` |
 | Product ID read in step 1 | `0x0009` | `0x0004` |
 | Reset pin | `RESETB`, **active low** | `RESET`, active high |
 | ULPI clock mode | **Clock-in**: one 60 MHz oscillator feeds the PHY `REFCLK` *and* FPGA JB3. The PHY `CLKOUT` pin is tied to `VDDIO` to select this mode. | **Clock-out**: the module's crystal drives the PHY PLL, and the PHY outputs 60 MHz on `CLKOUT` → JB3 |
