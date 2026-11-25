@@ -1,0 +1,4 @@
+amaranth==0.5.10
+amaranth-boards==0.0.21
+luna-usb==0.2.3
+pyserial==3.5

@@ -1,19 +1,20 @@
 """
-ULPI étape 1 — lecture des registres d'identification du USB3300 et test du
-registre Scratch, sur Arty A7-35T + module Waveshare USB3300.
+ULPI étape 1 — lecture des registres d'identification du USB3343 et test du
+registre Scratch, sur Arty A7-35T + proto USB3343
+(version Waveshare USB3300 : tag git usb3300).
 
 Câblage (Pmod JB = pmod 1, Pmod JC = pmod 2) :
     JB1 E15 STP    JB2 E16 NXT    JB3 D15 CLK (MRCC, côté P)   JB4 C15 DIR
-    JB10 J15 RESET (actif haut)
+    JB10 J15 RESETB (actif BAS sur le USB3343)
     JC1..JC4, JC7..JC10 : DATA0..DATA7
 
 Résultat :
     LD4 : battement (100 MHz, prouve que le FPGA est configuré)
     LD5 : MMCM verrouillé sur le 60 MHz du PHY
-    LD6 : Vendor ID = 0x0424 et Product ID = 0x0004
+    LD6 : Vendor ID = 0x0424 et Product ID = 0x0009
     LD7 : écriture puis relecture du registre Scratch OK
     UART (port COM de l'Arty, 115200 8N1), toutes les 0,5 s :
-        VID=0424 PID=0004 SCR=5A OK
+        VID=0424 PID=0009 SCR=5A OK
 
 ILA (IP Vivado, horloge ULPI, 4096 échantillons, 5 sondes) :
     probe0 ctrl[4] : bit0 DIR, bit1 NXT, bit2 STP, bit3 OE
@@ -44,8 +45,8 @@ SYS_HZ = 100_000_000
 ULPI_HZ = 60_000_000
 BAUD = 115_200
 
-USB3300_VID = 0x0424
-USB3300_PID = 0x0009   # lu sur le module (0x0007 = USB3320, 0x0006 = USB331x)
+PHY_VID = 0x0424
+PHY_PID = 0x0009   # USB3343 (0x0004 = USB3300 Waveshare, 0x0006 = USB331x, 0x0007 = USB3320)
 SCRATCH_ADDR = 0x16
 SCRATCH_VAL = 0x5A
 
@@ -139,7 +140,6 @@ class Top(Elaboratable):
         with m.Elif(~locked_sys):
             m.d.sync += boot.eq(0)  # pas d'horloge PHY : nouvelle tentative
         m.d.sync += [phy_rst.eq(boot < T_PHY_RST), mmcm_rst.eq(boot < T_MMCM_RST)]
-        #m.d.comb += rst_buf.o.eq(phy_rst)
         m.d.comb += rst_buf.o.eq(~phy_rst)
 
         # ------------------------------------------------------------------
@@ -304,7 +304,7 @@ class Top(Elaboratable):
         id_ok = Signal()
         scr_ok = Signal()
         with m.If(report):
-            m.d.ulpi += [id_ok.eq(~fail & (vid == USB3300_VID) & (pid == USB3300_PID)),
+            m.d.ulpi += [id_ok.eq(~fail & (vid == PHY_VID) & (pid == PHY_PID)),
                          scr_ok.eq(~fail & (scr == SCRATCH_VAL))]
 
         # ------------------------------------------------------------------
@@ -312,7 +312,7 @@ class Top(Elaboratable):
         # ------------------------------------------------------------------
         m.submodules.tx = tx = DomainRenamer("ulpi")(UartTx(round(ULPI_HZ / BAUD)))
         ok = Signal()
-        m.d.comb += ok.eq(~fail & (vid == USB3300_VID) & (pid == USB3300_PID)
+        m.d.comb += ok.eq(~fail & (vid == PHY_VID) & (pid == PHY_PID)
                           & (scr == SCRATCH_VAL))
 
         def s(text):

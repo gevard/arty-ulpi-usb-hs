@@ -1,5 +1,6 @@
 """
-ULPI étape 2 — RX CMD, LineState, VBUS et pull-up D+, sur Arty A7-35T + USB3300.
+ULPI étape 2 — RX CMD, LineState, VBUS et pull-up D+, sur Arty A7-35T + USB3343
+(version Waveshare USB3300 : tag git usb3300).
 
 Reprend le test de registres de l'étape 1 et ajoute :
   * la détection des RX CMD : le PHY prend le bus de lui-même (DIR = 1,
@@ -15,7 +16,7 @@ Reprend le test de registres de l'étape 1 et ajoute :
 
 Câblage (Pmod JB = pmod 1, Pmod JC = pmod 2) :
     JB1 E15 STP    JB2 E16 NXT    JB3 D15 CLK (MRCC, côté P)   JB4 C15 DIR
-    JB10 J15 RESET (actif haut)
+    JB10 J15 RESETB (actif BAS sur le USB3343)
     JC1..JC4, JC7..JC10 : DATA0..DATA7
 
 LED :
@@ -25,7 +26,7 @@ LED :
     LD7 : VBUS valide (d'après le dernier RX CMD)
 
 UART (115200 8N1) :
-    toutes les 0,5 s :  VID=0424 PID=0004 SCR=5A FC=45 RXC=0003 PKT=0000 OK
+    toutes les 0,5 s :  VID=0424 PID=0009 SCR=5A FC=45 RXC=0003 PKT=0000 OK
         RXC = nombre de RX CMD reçus, PKT = nombre d'octets de paquets reçus
     à chaque nouveau RX CMD (si l'UART est libre) :
         RXCMD=4D LS=J VB=3 EV=0
@@ -66,8 +67,8 @@ SYS_HZ = 100_000_000
 ULPI_HZ = 60_000_000
 BAUD = 115_200
 
-USB3300_VID = 0x0424
-USB3300_PID = 0x0009   # USB3300 (0x0006 = USB331x, 0x0007 = USB3320, 0x0009 = USB3343)
+PHY_VID = 0x0424
+PHY_PID = 0x0009   # USB3343 (0x0004 = USB3300 Waveshare, 0x0006 = USB331x, 0x0007 = USB3320)
 REG_FUNC_CTRL = 0x04
 REG_OTG_CTRL = 0x0A
 REG_SCRATCH = 0x16
@@ -342,7 +343,7 @@ class Top(Elaboratable):
         scr = res[7]
         fc = res[8]
         ok = Signal()
-        m.d.comb += ok.eq(~fail & (vid == USB3300_VID) & (pid == USB3300_PID)
+        m.d.comb += ok.eq(~fail & (vid == PHY_VID) & (pid == PHY_PID)
                           & (scr == SCRATCH_VAL) & (fc == fc_written))
         regs_ok = Signal()
         with m.If(report):
