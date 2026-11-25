@@ -357,18 +357,39 @@ class Top(Elaboratable):
 
         # SW1 = 0 : écho ; SW1 = 1 : flux continu + absorption
         counter = Signal(8)
+        # Écho : l'endpoint IN n'envoie un paquet incomplet (ou un ZLP après
+        # un paquet plein) que sur « last ». Or l'endpoint OUT de LUNA ne
+        # marque « last » qu'à la fin d'un paquet COURT : un transfert de
+        # n x 512 octets n'a aucun octet « last », l'écho partirait sans ZLP
+        # et usbser (Windows) ne livrerait jamais les données.
+        # On garde donc le dernier octet reçu ; s'il n'est suivi d'aucun autre
+        # pendant T_ECHO_IDLE, il est renvoyé avec last = 1 (LUNA ajoute alors
+        # le ZLP si le transfert finit pile sur 512).
+        T_ECHO_IDLE = ULPI_HZ // 5000          # 200 µs
+        held = Signal(8)
+        held_valid = Signal()
+        held_first = Signal()
+        held_last = Signal()
+        idle = Signal(range(T_ECHO_IDLE + 1))
+        timeout = Signal()
+        m.d.comb += timeout.eq(idle == T_ECHO_IDLE)
         with m.If(~sw1_u):
-            # « last » doit suivre : l'endpoint IN n'envoie un paquet incomplet
-            # (moins de 512 octets) que lorsque last = 1. Sans lui, un octet
-            # isolé resterait en attente jusqu'à remplir un paquet de 512.
             m.d.comb += [
-                tx.valid.eq(rx.valid),
-                tx.payload.eq(rx.payload),
-                tx.first.eq(rx.first),
-                tx.last.eq(rx.last),
-                rx.ready.eq(tx.ready),
+                tx.valid.eq(held_valid & (held_last | rx.valid | timeout)),
+                tx.payload.eq(held),
+                tx.first.eq(held_first),
+                tx.last.eq(held_last | timeout),
+                rx.ready.eq(~held_valid | (tx.valid & tx.ready)),
             ]
+            with m.If(rx.valid & rx.ready):
+                m.d.usb += [held.eq(rx.payload), held_first.eq(rx.first),
+                            held_last.eq(rx.last), held_valid.eq(1), idle.eq(0)]
+            with m.Elif(tx.valid & tx.ready):
+                m.d.usb += held_valid.eq(0)
+            with m.Elif(held_valid & ~timeout):
+                m.d.usb += idle.eq(idle + 1)
         with m.Else():
+            m.d.usb += held_valid.eq(0)
             m.d.comb += [
                 tx.valid.eq(1),
                 tx.payload.eq(counter),

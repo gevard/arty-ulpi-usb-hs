@@ -27,7 +27,23 @@ def find_port():
     sys.exit("Périphérique 1209:0001 introuvable (SW0 en haut ? énumération réussie ?)")
 
 
+def drain(ser, quiet=0.2):
+    """Jette les octets en attente (reste du mode débit SW1 = 1, encore dans
+    le tampon du PC ou dans l'endpoint IN du FPGA) jusqu'à `quiet` s de silence."""
+    ser.reset_input_buffer()
+    timeout, ser.timeout = ser.timeout, quiet
+    dropped = 0
+    while chunk := ser.read(1 << 16):
+        dropped += len(chunk)
+        if dropped > 1 << 20:
+            sys.exit("Le FPGA envoie en continu : SW1 est encore à 1 (mettre SW1 = 0 pour l'écho)")
+    ser.timeout = timeout
+    if dropped:
+        print(f"({dropped} octets en attente ignorés)")
+
+
 def echo(ser, rounds=200):
+    drain(ser)
     total, t0 = 0, time.perf_counter()
     for n in range(rounds):
         size = 1 + (n * 37) % 4096
