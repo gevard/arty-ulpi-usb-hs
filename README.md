@@ -8,11 +8,11 @@ on Windows as a virtual serial port (CDC-ACM, built-in `usbser` driver, no drive
 
 The project goes in three steps, each a separate bitstream:
 
-| Step | Script | What it proves |
-|---|---|---|
-| 1 | `ulpi_regtest.py` | ULPI register access: reads Vendor/Product ID, writes and reads back the Scratch register |
-| 2 | `ulpi_rxcmd.py` | RX CMDs (LineState, VBUS), D+ pull-up control, Full-Speed connection seen by the PC |
-| 3 | `ulpi_luna_acm.py` | Complete High-Speed CDC-ACM device (echo and throughput modes) |
+| Step | Script             | What it proves                                                                            |
+| ---- | ------------------ | ----------------------------------------------------------------------------------------- |
+| 1    | `ulpi_regtest.py`  | ULPI register access: reads Vendor/Product ID, writes and reads back the Scratch register |
+| 2    | `ulpi_rxcmd.py`    | RX CMDs (LineState, VBUS), D+ pull-up control, Full-Speed connection seen by the PC       |
+| 3    | `ulpi_luna_acm.py` | Complete High-Speed CDC-ACM device (echo and throughput modes)                            |
 
 Measured on the USB3343 prototype (Windows, High-Speed):
 
@@ -71,8 +71,7 @@ Notes:
   (device), `XO` left open, `CLKOUT` tied to `VDDIO` (clock-in mode).
 - **D+ / D- go straight to the connector, without series resistors.** The PHY already
   contains the 1.5 kΩ pull-up, the 15 kΩ pull-downs and the 45 Ω HS terminations. Check the
-  pin order: connector D+ → `DP` (pin 13), connector D- → `DM` (pin 14). See
-  [Lessons learned](#lessons-learned).
+  pin order: connector D+ → `DP` (pin 13), connector D- → `DM` (pin 14).
 
 ## Board controls
 
@@ -191,16 +190,10 @@ choose the port by hand.
 
 ## Lessons learned
 
-- **D+ / D- swapped.** If the PHY's D+ pull-up ends up on the cable's D- line, the PC sees a
-  *Low-Speed* device. Symptoms: `LS` changes a lot, `RST` keeps climbing (about 25/s), but
-  `RXA = SOF = 0` in both Full- and High-Speed, and Windows reports code 43. Revision 2 of the
-  USB3343 board had this error.
 - **Zero-length packets.** LUNA's OUT stream endpoint flags `last` only at the end of a
   *short* packet. An echo of a transfer that is an exact multiple of 512 bytes was therefore
   sent back without a ZLP, and Windows `usbser` never delivered the data. The echo now holds
   the last byte and sends it with `last = 1` after 200 µs of silence, so LUNA appends the ZLP.
-- **Loose Pmod contact on the clock line.** A bad contact on JB3 gave random behaviour that
-  looked like a timing problem. Check every Pmod pin before suspecting the logic.
 - **USB334x errata (DS80000645A, module 2).** In High-Speed, the link must wait one clock
   cycle between a ULPI register write and a transmit command, or the chirp fails. LUNA 0.2.3
   works with the USB3343 as is.
